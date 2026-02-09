@@ -183,7 +183,7 @@ async function aiExtract(b64,media,prompt){
   if(!key){alert('Please set your Anthropic API key in Settings first.');return null;}
   try{
     const cb=media==='application/pdf'?{type:'document',source:{type:'base64',media_type:media,data:b64}}:{type:'image',source:{type:'base64',media_type:media,data:b64}};
-    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:[cb,{type:'text',text:prompt}]}]})});
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:4000,messages:[{role:'user',content:[cb,{type:'text',text:prompt}]}]})});
     const d=await r.json();
     if(d.error){alert('API Error: '+(d.error.message||JSON.stringify(d.error)));return null;}
     const txt=d.content?.map(i=>i.text||'').join('\n')||'';
@@ -360,36 +360,46 @@ function rExpenses(){
 async function uploadExp(input){
   const file=input.files?.[0];if(!file)return;
   const el=document.getElementById('exp-status');
-  el.innerHTML='<div class="loading-msg"><div class="spinner"></div> Reading receipt...</div>';
+  el.innerHTML='<div class="loading-msg"><div class="spinner"></div> Reading receipt(s)...</div>';
   try{
     const b64=await fileToB64(file),mt=file.type||'application/pdf';
-    const r=await aiExtract(b64,mt,`You are reading a receipt or expense document. Extract ALL financial information very carefully.
+    const r=await aiExtract(b64,mt,`You are reading a receipt or expense document. There may be MULTIPLE receipts in this document (e.g. a multi-page PDF with one receipt per page).
 
-Look closely for:
+For EACH receipt found, extract:
 - Date of transaction
 - Business/vendor name
-- What was purchased
-- EXACT amounts: subtotal, tax, total — read every digit carefully
-- Currency: look for symbols ($, €, £, ¥) or codes (USD, CAD, EUR, GBP). If ambiguous, determine from vendor location/language.
+- What was purchased (include invoice/receipt number if visible)
+- EXACT amounts: subtotal/pre-tax amount, tax (GST, PST, HST, VAT etc.), and total — read every digit carefully
+- Currency: look for symbols (CA$, $, €, £, ¥) or codes. "CA$" means CAD.
 
 Suggest the best CRA business expense category from: ${CRA_CATEGORIES.join(', ')}
 
-Return ONLY valid JSON:
+If there is ONE receipt, return a single JSON object.
+If there are MULTIPLE receipts, return a JSON ARRAY of objects.
+
+Each object must have exactly these fields:
 {"date":"YYYY-MM-DD","vendor":"name","description":"what purchased","amount":0.00,"gst":0.00,"total":0.00,"currency":"CAD","suggestedCategory":"category"}
 
-IMPORTANT: Read amounts very carefully. Double-check decimal placement. ONLY return JSON.`);
+IMPORTANT: Read amounts very carefully. Double-check decimals. ONLY return valid JSON — no other text.`);
     if(r){
-      const id=genId(),cur=(r.currency||'CAD').toUpperCase(),origTot=r.total||r.amount||0;
-      let rate=1,cadTot=origTot,cadAmt=r.amount||0,cadGst=r.gst||0;
-      if(cur!=='CAD'){
-        el.innerHTML='<div class="loading-msg"><div class="spinner"></div> Converting '+cur+' → CAD...</div>';
-        const fx=await getRate(cur,'CAD',r.date||today());
-        if(fx){rate=fx;cadTot=origTot*fx;cadAmt=(r.amount||0)*fx;cadGst=(r.gst||0)*fx;}
-        else alert('Could not fetch '+cur+'/CAD rate. Amounts stored as-is.');
+      // Normalize to array
+      const items=Array.isArray(r)?r:[r];
+      el.innerHTML='<div class="loading-msg"><div class="spinner"></div> Processing '+items.length+' receipt(s)...</div>';
+      let added=0;
+      const isSingle=items.length===1;
+      for(const item of items){
+        const id=genId(),cur=(item.currency||'CAD').toUpperCase(),origTot=item.total||item.amount||0;
+        let rate=1,cadTot=origTot,cadAmt=item.amount||0,cadGst=item.gst||0;
+        if(cur!=='CAD'){
+          const fx=await getRate(cur,'CAD',item.date||today());
+          if(fx){rate=fx;cadTot=origTot*fx;cadAmt=(item.amount||0)*fx;cadGst=(item.gst||0)*fx;}
+        }
+        const exp={id,date:item.date||today(),vendor:item.vendor||'Unknown',description:item.description||'',amount:cadAmt,gst:cadGst,total:cadTot,originalAmount:item.amount||0,originalGst:item.gst||0,originalTotal:origTot,currency:cur,exchangeRate:rate,cadTotal:cadTot,category:item.suggestedCategory||'Other',year:getYr(item.date||today()),hasReceipt:isSingle};
+        if(isSingle)saveReceipt(id,{data:b64,type:mt});
+        state.expenses.push(exp);added++;
       }
-      const exp={id,date:r.date||today(),vendor:r.vendor||'Unknown',description:r.description||'',amount:cadAmt,gst:cadGst,total:cadTot,originalAmount:r.amount||0,originalGst:r.gst||0,originalTotal:origTot,currency:cur,exchangeRate:rate,cadTotal:cadTot,category:r.suggestedCategory||'Other',year:getYr(r.date||today()),hasReceipt:true};
-      saveReceipt(id,{data:b64,type:mt});
-      state.expenses.push(exp);saveExpenses();eSub='list';render();
+      saveExpenses();eSub='list';render();
+      if(added>1)alert('Added '+added+' expenses from multi-receipt upload.\n\nNote: For multi-receipt PDFs, the original file is not stored per-receipt (too large). Keep your original PDF as a backup.');
     }else el.innerHTML='<p style="color:#d9534f;margin-top:12px">Could not extract data. Try a clearer photo or manual entry.</p>';
   }catch(e){el.innerHTML='<p style="color:#d9534f;margin-top:12px">Error: '+e.message+'</p>';}
   input.value='';
