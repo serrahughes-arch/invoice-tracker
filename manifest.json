@@ -1,0 +1,22 @@
+{
+  "name": "Invoice & Expense Tracker",
+  "short_name": "InvoiceTracker",
+  "description": "Track invoices, expenses, and generate tax reports",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1a2332",
+  "theme_color": "#2a7d6e",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
